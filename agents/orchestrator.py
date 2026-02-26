@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 from tools.bronze_extractor import extract_bronze
 from tools.dag_runner import run_template_dag, load_template
-from tools.mock_router import decide_mock_flow, choose_subtree_steps
+from tools.mock_router import decide_mock_flow, choose_subtree_steps, resolve_dynamic_retrieval
 
 from agents.overview_agent import run_overview
 from agents.precision_agent import run_precision
@@ -87,6 +87,7 @@ def _build_evidence_packet(
     findings: list[dict[str, Any]],
     obligations: list[dict[str, Any]],
     classified_nodes: list[dict[str, Any]],
+    retrieval: dict[str, Any],
 ) -> dict[str, Any]:
     cited_findings = [
         finding
@@ -108,6 +109,7 @@ def _build_evidence_packet(
         "findings": cited_findings,
         "obligations": obligations,
         "classified_nodes": top_classified,
+        "retrieval": retrieval,
     }
 
 
@@ -117,6 +119,7 @@ def run_pipeline(
     doc_type: str,
     persist: bool = True,
     query: str | None = None,
+    retrieval_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     bronze = extract_bronze(doc_path)
     text = bronze["extracted_text"]
@@ -141,6 +144,28 @@ def run_pipeline(
     )
     router_decision["selected_steps"] = selected_steps
     router_decision["available_steps"] = available_step_ids
+
+    if mode == "auto" or doc_type == "auto":
+        silver_candidate = SILVER_DIR / f"{doc_path.stem}.auto.auto.silver.json"
+    else:
+        silver_candidate = SILVER_DIR / f"{doc_path.stem}.{resolved_doc_type}.{resolved_mode}.silver.json"
+
+    if retrieval_override is None:
+        retrieval_result = resolve_dynamic_retrieval(
+            query=query,
+            doc_path=doc_path,
+            doc_type=resolved_doc_type,
+            mode=resolved_mode,
+            bronze_path=BRONZE_DIR / f"{doc_path.stem}.bronze.json",
+            silver_path=silver_candidate,
+            k=3,
+            params={"window": 6},
+        )
+    else:
+        retrieval_result = retrieval_override
+
+    router_decision["spine_source"] = retrieval_result.get("spine_source", "auto")
+    router_decision["retrieval"] = retrieval_result.get("retrieval", {})
 
     dag_result = run_template_dag(
         template_path=template_path,
@@ -179,6 +204,7 @@ def run_pipeline(
         findings=findings,
         obligations=obligations,
         classified_nodes=classified_nodes,
+        retrieval=router_decision.get("retrieval", {}),
     )
 
     bronze_path: Path | None = None
@@ -220,7 +246,7 @@ def run_pipeline(
             }
         return output
 
-    precision = run_precision(findings)
+    precision = run_precision(findings, router_decision.get("retrieval", {}).get("chunks", []))
     output = {
         "document": str(doc_path),
         "doc_type": resolved_doc_type,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any
+
+from tools.dynamic_chunker import build_chunks, rank_chunks
+from tools.spine_resolver import resolve_spine
 
 DOC_TYPES = ("nda", "msa", "credit_agreement", "loan_agreement")
 MODES = ("overview", "precision")
@@ -121,6 +125,10 @@ def _select_mode(requested_mode: str, doc_type: str, query: str, text: str) -> t
         reasons.append("query contains precision/evidence keywords")
         return "precision", reasons
 
+    if "confidentiality" in query.lower():
+        reasons.append("confidentiality-focused query defaults to precision")
+        return "precision", reasons
+
     if _QUERY_MODE_PATTERNS["overview"].search(query):
         reasons.append("query contains overview keywords")
         return "overview", reasons
@@ -238,3 +246,35 @@ def choose_subtree_steps(profile: str, available_step_ids: list[str], mode: str)
 
     available = set(available_step_ids)
     return [step for step in requested if step in available]
+
+
+def resolve_dynamic_retrieval(
+    query: str | None,
+    doc_path: str | Path,
+    doc_type: str,
+    mode: str,
+    bronze_path: str | Path | None = None,
+    silver_path: str | Path | None = None,
+    k: int = 3,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved_query = _safe(query)
+    spine_doc = resolve_spine(
+        doc_path=doc_path,
+        doc_type=doc_type,
+        mode=mode,
+        bronze_path=bronze_path,
+        silver_path=silver_path,
+    )
+    chunk_graph = build_chunks(spine_doc.nodes, params=params or {"window": 6})
+    hits = rank_chunks(chunk_graph, resolved_query, k=k)
+
+    return {
+        "spine_source": spine_doc.spine_source,
+        "retrieval": {
+            "method": "dynamic_chunking_naive_mass_strength",
+            "chunks": [hit.to_dict() for hit in hits],
+            "chunk_count": len(chunk_graph.chunks),
+            "params": chunk_graph.params,
+        },
+    }

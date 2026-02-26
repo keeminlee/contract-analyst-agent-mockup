@@ -4,7 +4,6 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
-import re
 import sys
 import time
 from typing import Any
@@ -14,9 +13,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agents.orchestrator import run_pipeline
-from tools.bronze_extractor import extract_bronze
-from tools.dag_runner import load_template
-from tools.mock_router import choose_subtree_steps, decide_mock_flow
 
 
 SCENARIOS: dict[str, dict[str, str]] = {
@@ -62,81 +58,17 @@ def _step_delay(step_id: str, speed: float) -> float:
     return max(0.05, base * max(0.1, speed))
 
 
-def _tokenize(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9_]+", text.lower()))
-
-
-def _mock_rag_top1(query: str, preferred_doc: Path | None = None) -> dict[str, Any]:
-    corpus_dir = ROOT / "docs" / "cache"
-    candidates = sorted(path for path in corpus_dir.glob("*.txt") if path.is_file())
-    if not candidates:
-        raise FileNotFoundError("No .txt documents found in docs/cache for mock RAG retrieval")
-
-    query_tokens = _tokenize(query)
-    finance_tokens = {
-        "credit",
-        "loan",
-        "borrower",
-        "lender",
-        "default",
-        "covenant",
-        "collateral",
-        "interest",
-        "principal",
-    }
-    nda_tokens = {"nda", "confidential", "confidentiality", "disclosure"}
-
-    ranking: list[dict[str, Any]] = []
-    for path in candidates:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        tokens = _tokenize(text)
-        overlap = len(query_tokens & tokens)
-        score = float(overlap)
-
-        if query_tokens & finance_tokens and ("credit" in path.name.lower() or "loan" in path.name.lower()):
-            score += 2.0
-        if query_tokens & nda_tokens and "nda" in path.name.lower():
-            score += 2.0
-        if preferred_doc and path.resolve() == preferred_doc.resolve():
-            score += 0.5
-
-        ranking.append({"doc": path, "score": round(score, 3), "overlap": overlap})
-
-    ranking.sort(key=lambda item: item["score"], reverse=True)
-    top = ranking[0]
-    return {
-        "strategy": "mock_top1_regex_overlap",
-        "placeholder": True,
-        "corpus_size": len(candidates),
-        "top_k": 1,
-        "top_1": {
-            "doc": str(top["doc"]),
-            "score": top["score"],
-            "token_overlap": top["overlap"],
-        },
-        "ranked": [
-            {
-                "doc": str(item["doc"]),
-                "score": item["score"],
-                "token_overlap": item["overlap"],
-            }
-            for item in ranking
-        ],
-    }
-
-
-def _print_decision_summary(
-    decision: dict[str, Any],
-    rag_result: dict[str, Any],
-    selected_steps: list[str],
-) -> None:
+def _print_decision_summary(decision: dict[str, Any]) -> None:
     rows = [
-        ("Retrieved Doc (Top-1)", Path(rag_result["top_1"]["doc"]).name),
+        ("Spine Source", str(decision.get("spine_source", ""))),
         ("Mode", str(decision.get("mode", ""))),
         ("Doc Type", str(decision.get("doc_type", ""))),
         ("Subtree Profile", str(decision.get("subtree_profile", ""))),
         ("Confidence", str(decision.get("confidence", ""))),
-        ("Selected Steps", " -> ".join(selected_steps) if selected_steps else "(none)"),
+        (
+            "Selected Steps",
+            " -> ".join(decision.get("selected_steps", [])) if decision.get("selected_steps") else "(none)",
+        ),
     ]
     key_width = max(len(key) for key, _ in rows)
     print("         +" + "-" * (key_width + 2) + "+" + "-" * 72 + "+")
@@ -146,12 +78,33 @@ def _print_decision_summary(
     print("         +" + "-" * (key_width + 2) + "+" + "-" * 72 + "+")
 
 
+def _load_retrieval_override(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    retrieval = payload.get("evidence_packet", {}).get("retrieval")
+    if retrieval is None and isinstance(payload.get("retrieval"), dict):
+        retrieval = payload.get("retrieval")
+
+    if not isinstance(retrieval, dict):
+        raise ValueError("retrieval override file must include evidence_packet.retrieval or retrieval object")
+
+    spine_source = (
+        payload.get("orchestrator_decision", {}).get("spine_source")
+        or payload.get("spine_source")
+        or "replay"
+    )
+    return {
+        "spine_source": spine_source,
+        "retrieval": retrieval,
+    }
+
+
 def run_scenario(
     name: str,
     persist: bool = True,
     verbose_flow: bool = True,
     simulate_latency: bool = True,
     speed_multiplier: float = 1.0,
+    retrieval_override_path: Path | None = None,
 ) -> dict[str, Any]:
     if name not in SCENARIOS:
         valid = ", ".join(sorted(SCENARIOS.keys()))
@@ -160,6 +113,7 @@ def run_scenario(
     scenario = SCENARIOS[name]
     requested_doc_path = ROOT / scenario["doc"]
     query = scenario["query"]
+    retrieval_override = _load_retrieval_override(retrieval_override_path) if retrieval_override_path else None
 
     if verbose_flow:
         print("\n=== CONTRACT ANALYST AGENT • ONLINE FLOW DEMO ===")
@@ -167,86 +121,33 @@ def run_scenario(
         _log("   User Query", query)
         _wait(0.25 * speed_multiplier, simulate_latency)
 
-        _log(
-            "2) Mock RAG Retrieval (Placeholder)",
-            "Simulation only: selecting Top-1 document from local corpus for runtime",
-        )
-
-    rag_result = _mock_rag_top1(query=query, preferred_doc=requested_doc_path)
-    retrieved_doc_path = Path(rag_result["top_1"]["doc"])
-
-    if verbose_flow:
-        _wait(0.35 * speed_multiplier, simulate_latency)
-        _log(
-            "   RAG Top-1",
-            (
-                f"doc={retrieved_doc_path.name} | score={rag_result['top_1']['score']} | "
-                f"token_overlap={rag_result['top_1']['token_overlap']} | corpus={rag_result['corpus_size']}"
-            ),
-        )
-        _log("3) Load Retrieved Bronze Context", "Reading extracted text of retrieved Top-1 document")
-
-    bronze = extract_bronze(retrieved_doc_path)
-    document_text = bronze["extracted_text"]
-
-    if verbose_flow:
-        _wait(0.35 * speed_multiplier, simulate_latency)
-        _log(
-            "4) Orchestrator Decision (Mock Router)",
-            "Choosing mode, doc type, and DAG subtree profile via regex policy",
-        )
-
-    decision = decide_mock_flow(
-        query=query,
-        document_text=document_text,
-        requested_mode="auto",
-        requested_doc_type="auto",
-    )
-    template = load_template(ROOT / "templates" / f"{decision['doc_type']}.yml")
-    available_steps = [node["id"] for node in template.get("nodes", [])]
-    selected_steps = choose_subtree_steps(
-        profile=decision["subtree_profile"],
-        available_step_ids=available_steps,
-        mode=decision["mode"],
-    )
-
-    if verbose_flow:
-        _wait(0.35 * speed_multiplier, simulate_latency)
-        _log(
-            "   Routing Output",
-            f"mode={decision['mode']} | doc_type={decision['doc_type']} | profile={decision['subtree_profile']} | confidence={decision['confidence']}",
-        )
-        _log("   Decision Summary", "Compact runtime routing table")
-        _print_decision_summary(decision, rag_result, selected_steps)
-
-        _log("5) Conditional DAG Plan", "Selected online execution steps:")
-        print(f"         {' -> '.join(selected_steps) if selected_steps else '(none)'}")
-
-        for idx, step_id in enumerate(selected_steps, start=1):
-            _wait(_step_delay(step_id, speed_multiplier), simulate_latency)
-            _log(f"   5.{idx} Executing Step", f"{step_id}")
-
-        _wait(0.30 * speed_multiplier, simulate_latency)
-        _log("6) Build Evidence Packet", "Collecting citations, findings, obligations, and trace metadata")
+        if retrieval_override:
+            _log("2) Retrieval Source", f"Replay override loaded from {retrieval_override_path}")
+        else:
+            _log("2) Retrieval Source", "Delegating retrieval to orchestrator runtime")
+        _wait(0.25 * speed_multiplier, simulate_latency)
+        _log("3) Orchestrator Run", "Executing auto route with shared spine resolver + dynamic chunking")
 
     output = run_pipeline(
-        doc_path=retrieved_doc_path,
+        doc_path=requested_doc_path,
         mode="auto",
         doc_type="auto",
         persist=persist,
         query=query,
+        retrieval_override=retrieval_override,
     )
+
+    decision = output.get("orchestrator_decision", {})
 
     evidence_packet = output.get("evidence_packet", {})
     evidence_payload = {
         "scenario": name,
         "query": scenario["query"],
         "requested_doc": scenario["doc"],
-        "retrieved_doc": str(retrieved_doc_path),
-        "retrieval": rag_result,
+        "retrieval_override": str(retrieval_override_path) if retrieval_override_path else None,
         "doc_type": output.get("doc_type"),
         "mode": output.get("mode"),
-        "orchestrator_decision": output.get("orchestrator_decision", {}),
+        "orchestrator_decision": decision,
         "dag_execution": output.get("dag_execution", {}),
         "evidence_packet": evidence_packet,
     }
@@ -255,29 +156,40 @@ def run_scenario(
     _write_json(out_path, evidence_payload)
 
     if verbose_flow:
+        _wait(0.2 * speed_multiplier, simulate_latency)
+        _log("4) Decision Summary", "Runtime routing and retrieval summary")
+        _print_decision_summary(decision)
+
+        selected_steps = decision.get("selected_steps", [])
+        _log("5) Conditional DAG Plan", "Executed online plan:")
+        print(f"         {' -> '.join(selected_steps) if selected_steps else '(none)'}")
+        for idx, step_id in enumerate(selected_steps, start=1):
+            _wait(_step_delay(step_id, speed_multiplier), simulate_latency)
+            _log(f"   5.{idx} Executed Step", f"{step_id}")
+
         _wait(0.25 * speed_multiplier, simulate_latency)
-        _log(
-            "7) Runtime Complete",
-            (
-                f"doc_type={output.get('doc_type')} | mode={output.get('mode')} | "
-                f"citations={len(evidence_packet.get('citations', []))} | output={out_path}"
-            ),
-        )
+        _log("6) Runtime Complete", f"doc_type={output.get('doc_type')} | mode={output.get('mode')} | chunks={len(evidence_packet.get('retrieval', {}).get('chunks', []))} | output={out_path}")
         print("=== END ONLINE FLOW DEMO ===\n")
 
     return {
         "scenario": name,
         "output_path": str(out_path),
-        "retrieved_doc": str(retrieved_doc_path),
+        "document": str(requested_doc_path),
         "doc_type": output.get("doc_type"),
         "mode": output.get("mode"),
         "citations": len(evidence_packet.get("citations", [])),
+        "retrieval_chunks": len(evidence_packet.get("retrieval", {}).get("chunks", [])),
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run demo E2E flow from query+doc to Evidence Packet")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS.keys()), default="credit_precision")
+    parser.add_argument(
+        "--retrieval-override",
+        default="",
+        help="Path to an evidence packet JSON whose evidence_packet.retrieval will be replayed",
+    )
     parser.add_argument("--no-persist", action="store_true")
     parser.add_argument("--quiet", action="store_true", help="Suppress formatted online-flow logging")
     parser.add_argument("--no-sim-delay", action="store_true", help="Disable artificial delay between online flow steps")
@@ -295,6 +207,7 @@ def main() -> None:
         verbose_flow=not args.quiet,
         simulate_latency=not args.no_sim_delay,
         speed_multiplier=args.speed,
+        retrieval_override_path=Path(args.retrieval_override) if args.retrieval_override else None,
     )
     print(json.dumps(result, indent=2))
 

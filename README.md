@@ -1,221 +1,224 @@
 # Contract Analyst Agent (Prototype)
 
-A contracts-native analysis demo built around deterministic data flow:
+Deterministic contracts pipeline:
 
-**Bronze → Silver → Orchestrator Decision → DAG Subtree Walk → Evidence Packet → Answer**
-
-This repo is optimized for local prototyping and presentation of the upstream processing model that will later be integrated into AiDa.
+**Bronze → Spine (Silver or Auto) → Dynamic Chunk Retrieval → Router Decision → DAG Steps → Evidence Packet → Answer**
 
 ---
 
-## 1) Data Flow (Presentation View)
+## What’s New (Spine + Retrieval)
 
-### Step A — Offline document processing
+### 1) Canonical SpineDoc schema
 
-Input contracts are ingested and structurally prepared:
+- File: `tools/spine_types.py`
+- Defines:
+  - `SpineNode`: `node_id`, `kind`, `title`, `text`, `span_start`, `span_end`, `mass`, `meta`
+  - `SpineDoc`: `nodes`, `spine_source`, `meta`
 
-- **Bronze layer (immutable):** raw source + extracted text + metadata
-- **Silver layer (structural spine):** headings, clauses, definitions, classified nodes
+### 2) Silver spine loader helpers
 
-Artifacts are persisted on disk for reproducibility.
+- File: `tools/spine_io.py`
+- `load_silver_spine(path) -> SpineDoc`
+  - Wraps existing Silver JSON (`spine.headings|clauses|definitions`) into `SpineDoc.nodes`
+  - Normalizes kinds and masses
+- `save_spine(path, spine_doc)`
+  - Optional utility for persisted spine artifacts
 
-### Step B — Runtime query orchestration
+### 3) Auto spine fallback builder (Bronze text)
 
-Given a user query + input document, the orchestrator first runs a **mock retrieval stage** and then performs mock agent decisions (regex-based):
+- File: `tools/auto_spine_builder.py`
+- `build_auto_spine(full_text) -> SpineDoc`
+  - Splits blocks by blank lines
+  - Heading heuristic regex:
+    - `^(SECTION|ARTICLE)\b`
+    - `^\d+(\.\d+)*\b`
+    - `^[A-Z][A-Z\s]{8,}$`
+  - Assigns `kind` = `heading|paragraph`
+  - Computes stable `span_start` / `span_end`
+  - Computes `mass = 1 + 0.002*num_chars + kind_bonus`
 
-1. **Mock RAG Top-1 retrieval (placeholder simulation):**
-  - retrieves one document from local corpus for runtime processing
-  - currently regex/token-overlap based
-  - explicitly a demo placeholder for future real retriever
+### 4) Spine resolver (Silver preferred, Auto fallback)
 
-2. **Mode routing:** `overview` vs `precision`
-3. **Doc type routing:** `nda`, `msa`, `credit_agreement`, `loan_agreement`
-4. **Conditional DAG routing:** choose subtree profile
-  - `classification_only`
-  - `obligation_probe`
-  - `playbook_diff`
+- File: `tools/spine_resolver.py`
+- `resolve_spine(doc_path, doc_type, mode, bronze_path=None, silver_path=None) -> SpineDoc`
+  - If Silver exists at the resolved path, uses `load_silver_spine`
+  - Else uses Bronze extracted text and `build_auto_spine`
+  - Returns `SpineDoc` with `spine_source = "silver" | "auto"`
 
-### Step C — Targeted DAG execution
+### 5) Naive dynamic chunking + ranking
 
-A template DAG is loaded for the selected doc type and only the selected subtree is executed.
-
-### Step D — Evidence packet assembly
-
-The pipeline emits a structured evidence packet containing:
-
-- citation-bearing findings
-- span references (`node_id`, `span_start`, `span_end`)
-- obligations
-- high-confidence classified nodes
-- DAG execution trace metadata
-
-### Step E — Answer stage (prototype)
-
-The precision agent produces citation-enforced outputs from findings.
-In production, this evidence packet is intended to be injected into AiDa prompt templates.
-
----
-
-## 2) What Is Implemented Right Now
-
-### Bronze extraction
-
-File: `tools/bronze_extractor.py`
-
-- Supports `.txt`, `.pdf`, `.docx`
-- Persists artifacts to `docs/bronze/<doc>.bronze.json`
-
-### Silver structural processing
-
-Files:
-
-- `tools/spine_builder.py`
-- `tools/clause_classifier.py`
-- `tools/obligation_extractor.py`
-- `tools/playbook_compare.py`
-
-Persists artifacts to:
-
-- `docs/silver/<doc>.<doc_type>.<mode>.silver.json`
-
-### Template DAG execution
-
-File: `tools/dag_runner.py`
-
-- Loads YAML template by doc type
-- Executes dependency-aware DAG steps
-- Supports runtime subtree override (`requested_steps`)
-- Emits deterministic trace
-
-### Mock orchestrator decision logic (regex)
-
-File: `tools/mock_router.py`
-
-- Auto-selects mode/doc type from query + document text
-- Selects subtree profile
-- Outputs reasons + confidence + selected steps
-
-### Orchestrator + agents
-
-Files:
-
-- `agents/orchestrator.py`
-- `agents/overview_agent.py`
-- `agents/precision_agent.py`
-
-Orchestrator now supports:
-
-- `--mode auto|overview|precision`
-- `--doc-type auto|nda|msa|credit_agreement|loan_agreement`
-- `--query "..."`
-
-### End-to-end demo runner
-
-File: `scripts/demo_e2e.py`
-
-Runs pre-written query+doc scenarios and writes final evidence packets to:
-
-- `docs/cache/demo_outputs/*.evidence_packet.json`
+- File: `tools/dynamic_chunker.py`
+- `build_chunks(nodes, params) -> ChunkGraph`
+  - Neighbor window `W=6`
+  - Strength = distance-decayed token overlap
+  - Mass-aware merge threshold
+- `rank_chunks(chunk_graph, query, k=3) -> List[ChunkHit]`
+  - Scores by query token overlap + small mass tie-break
+  - Returns chunks with `chunk_id`, `score`, `mass`, `span_start`, `span_end`, `excerpt`
 
 ---
 
-## 3) Supported Templates and Baselines
+## Routing + Retrieval Wiring
 
-### Templates (`templates/`)
+### Router shared retrieval helper
 
-- `nda.yml`
-- `msa.yml`
-- `credit_agreement.yml`
-- `loan_agreement.yml`
+- File: `tools/mock_router.py`
+- `resolve_dynamic_retrieval(...)`
+  - Resolves spine
+  - Builds chunk graph
+  - Ranks top-k chunks
+  - Returns:
+    - `spine_source`
+    - `retrieval.method = dynamic_chunking_naive_mass_strength`
+    - `retrieval.chunks`
 
-### Baselines (`precedent_store/`)
+### Orchestrator output changes
 
-- `nda_baseline.json`
-- `msa_baseline.json`
-- `credit_agreement_baseline.json`
-- `loan_agreement_baseline.json`
+- File: `agents/orchestrator.py`
+- `run_pipeline(...)` now supports hybrid retrieval:
+  - if `retrieval_override` is provided, uses it
+  - else computes internally via `resolve_dynamic_retrieval(...)`
+- Decision JSON includes:
+  - `orchestrator_decision.spine_source`
+  - `orchestrator_decision.retrieval`
+- Evidence packet includes:
+  - `evidence_packet.retrieval`
+  - each chunk includes `chunk_id`, `score`, `mass`, `span_start`, `span_end`, `excerpt` (plus `node_ids`)
 
----
+### Precision agent constraint
 
-## 4) Runtime Output Contract
-
-Each orchestrator run returns JSON including:
-
-- `document`, `doc_type`, `mode`, `query`
-- `orchestrator_decision`
-  - keyword scores
-  - selected mode/doc type/profile
-  - selected DAG steps
-  - reasoning
-- `dag_execution`
-  - template route steps vs selected steps
-  - actual executed steps
-  - step trace
-- `evidence_packet`
-- `result` (overview or precision output)
-- `artifacts` (Bronze/Silver paths)
+- File: `agents/precision_agent.py`
+- Precision now uses only retrieved chunk excerpts for quote context
+- Citations reference chunk IDs and span ranges in answer text
 
 ---
 
-## 5) Demo Commands (End-to-End)
+## Existing Components
 
-### A) Auto-routed direct orchestrator runs
+- Bronze extraction: `tools/bronze_extractor.py`
+- DAG execution: `tools/dag_runner.py`
+- Structural/classification tools:
+  - `tools/spine_builder.py`
+  - `tools/clause_classifier.py`
+  - `tools/obligation_extractor.py`
+  - `tools/playbook_compare.py`
+- Agents:
+  - `agents/orchestrator.py`
+  - `agents/overview_agent.py`
+  - `agents/precision_agent.py`
+
+Templates in `templates/`; baselines in `precedent_store/`.
+
+---
+
+## Quick Usage
+
+### Orchestrator (auto routing)
 
 ```bash
-python agents/orchestrator.py --doc docs/cache/sample_nda.txt --mode auto --doc-type auto --query "give me a high level summary"
-python agents/orchestrator.py --doc docs/cache/sample_credit_agreement.txt --mode auto --doc-type auto --query "quote events of default and compare to baseline"
+python agents/orchestrator.py --doc docs/cache/sample_nda.txt --mode auto --doc-type auto --query "summarize confidentiality"
 ```
 
-### B) Scenario runner (query + doc → evidence packet file)
+### Demo runner (delegates retrieval to orchestrator)
 
 ```bash
 python scripts/demo_e2e.py --scenario nda_overview
 python scripts/demo_e2e.py --scenario credit_precision
 ```
 
-Presentation/runtime options:
+Replay retrieval deterministically from a prior evidence packet:
 
 ```bash
-python scripts/demo_e2e.py --scenario credit_precision --speed 1.2
-python scripts/demo_e2e.py --scenario credit_precision --no-sim-delay
-python scripts/demo_e2e.py --scenario credit_precision --quiet
+python scripts/demo_e2e.py --scenario nda_overview --retrieval-override docs/cache/demo_outputs/nda_overview.evidence_packet.json
 ```
 
-- `--speed`: latency multiplier for simulated online step timing (`<1` faster, `>1` slower)
-- `--no-sim-delay`: keep formatted logs but remove artificial waiting
-- `--quiet`: suppress formatted step logs and print only final JSON summary
+The demo runner no longer performs its own top-1 retrieval logic; retrieval is sourced from orchestrator runtime (or replay override).
 
-Generated artifacts:
+### Expected smoke signals
 
-- `docs/cache/demo_outputs/nda_overview.evidence_packet.json`
-- `docs/cache/demo_outputs/credit_precision.evidence_packet.json`
-
----
-
-## 6) Why This Is Demo-Ready
-
-- Full data flow from query+doc to evidence packet is wired
-- Auto orchestration decisions are visible and reproducible
-- DAG subtree routing is conditional and inspectable
-- Precision path remains citation-first
-- Outputs are persisted as concrete artifacts for review
+- `orchestrator_decision.spine_source` should be present (`auto` or `silver`)
+- `evidence_packet.retrieval.chunks` should include top chunk hits (`k=3` default)
+- Precision answers cite chunk IDs when precision mode is selected
 
 ---
 
-## 7) Current Boundaries
+## Setup on a New Device
 
-- Retriever / top-k multi-document RAG is not implemented in this mock
-- Router is regex-based (placeholder for future LLM policy/router agent)
-- Extraction/classification are heuristic (good for prototype demos, not production-grade legal QA)
+Recommended transfer method is source-only archive plus dependency lockfile.
+
+### 1) Prepare on source machine
+
+```bash
+python -m pip freeze > requirements.txt
+```
+
+Create an archive that excludes virtual environment, cache, and generated artifacts:
+
+```bash
+tar -a -c -f CAA_ultra_lean.zip \
+  --exclude=.venv \
+  --exclude=.git \
+  --exclude=__pycache__ \
+  --exclude=docs/cache \
+  --exclude=docs/bronze \
+  --exclude=docs/silver \
+  --exclude=docs/cache/demo_outputs \
+  .
+```
+
+### 2) Restore on destination machine (Windows PowerShell)
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If script execution is blocked in PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+### 3) Run a quick check
+
+```bash
+python scripts/demo_e2e.py --scenario nda_overview
+```
 
 ---
 
-## 8) Next Integration Step Toward AiDa
+## Programmatic Examples
 
-Swap the mock regex router with an LLM orchestrator policy layer while keeping:
+### Load Silver spine as SpineDoc
 
-- same Bronze/Silver contracts
-- same template DAG execution interface
-- same evidence packet schema
+```python
+from tools.spine_io import load_silver_spine
 
-That preserves the architecture while upgrading decision intelligence.
+spine = load_silver_spine("docs/silver/sample_nda.nda.overview.silver.json")
+print(spine.spine_source)          # silver
+print(spine.nodes[0].node_id)
+```
+
+### Resolve spine with fallback
+
+```python
+from tools.spine_resolver import resolve_spine
+
+spine = resolve_spine(
+    doc_path="docs/cache/sample_nda.txt",
+    doc_type="nda",
+    mode="overview",
+)
+print(spine.spine_source)          # silver or auto
+print(len(spine.nodes))
+```
+
+---
+
+## Notes
+
+- Retrieval is intentionally minimal/naive for prototype determinism.
+- Router policy remains regex-based mock logic.
+- This repo is optimized for transparent artifacts and inspectable execution traces.
