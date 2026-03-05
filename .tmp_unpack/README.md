@@ -184,19 +184,8 @@ Create an archive that excludes virtual environment, cache, and generated artifa
 Windows PowerShell (single line, copy/paste-safe):
 
 ```powershell
-tar -a -c -f CAA_ultra_lean.zip `
---exclude ".venv" `
---exclude ".git" `
---exclude "__pycache__" `
---exclude "docs/cache" `
---exclude "docs/bronze" `
---exclude "docs/silver" `
---exclude "docs/cache/demo_outputs" `
---exclude "CAA_ultra_lean.zip" `
-*
+tar -a -c -f CAA_ultra_lean.zip --exclude=.venv --exclude=.git --exclude=__pycache__ --exclude=docs/cache --exclude=docs/bronze --exclude=docs/silver --exclude=docs/cache/demo_outputs .
 ```
-
-Note: This intentionally excludes generated artifact folders (`docs/cache`, `docs/bronze`, `docs/silver`), so those directories may appear empty after extraction.
 
 ### 2) Restore on destination machine (Windows PowerShell)
 

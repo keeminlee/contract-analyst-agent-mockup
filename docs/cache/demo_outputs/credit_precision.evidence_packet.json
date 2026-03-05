@@ -2,30 +2,7 @@
   "scenario": "credit_precision",
   "query": "Quote events of default and compare against baseline risk requirements.",
   "requested_doc": "docs/cache/sample_credit_agreement.txt",
-  "retrieved_doc": "G:\\CAA\\docs\\cache\\sample_credit_agreement.txt",
-  "retrieval": {
-    "strategy": "mock_top1_regex_overlap",
-    "placeholder": true,
-    "corpus_size": 2,
-    "top_k": 1,
-    "top_1": {
-      "doc": "G:\\CAA\\docs\\cache\\sample_credit_agreement.txt",
-      "score": 6.5,
-      "token_overlap": 4
-    },
-    "ranked": [
-      {
-        "doc": "G:\\CAA\\docs\\cache\\sample_credit_agreement.txt",
-        "score": 6.5,
-        "token_overlap": 4
-      },
-      {
-        "doc": "G:\\CAA\\docs\\cache\\sample_nda.txt",
-        "score": 1.0,
-        "token_overlap": 1
-      }
-    ]
-  },
+  "retrieval_override": null,
   "doc_type": "credit_agreement",
   "mode": "precision",
   "orchestrator_decision": {
@@ -60,7 +37,51 @@
       "clause_classifier",
       "obligation_extractor",
       "playbook_compare"
-    ]
+    ],
+    "spine_source": "auto",
+    "retrieval": {
+      "method": "dynamic_chunking_naive_mass_strength",
+      "chunks": [
+        {
+          "chunk_id": "chunk_6",
+          "score": 0.4124,
+          "mass": 1.24,
+          "span_start": 729,
+          "span_end": 849,
+          "excerpt": "Section 6 Defaults\n6.1 Events of Default. Non-payment, covenant breach, and cross default trigger acceleration remedies.",
+          "node_ids": [
+            "auto_6"
+          ]
+        },
+        {
+          "chunk_id": "chunk_1",
+          "score": 0.2132,
+          "mass": 1.32,
+          "span_start": 0,
+          "span_end": 160,
+          "excerpt": "Section 1 Definitions\n1.1 Conditions Precedent. Conditions precedent to initial borrowing include delivery of constitutional documents and officer certificates.",
+          "node_ids": [
+            "auto_1"
+          ]
+        },
+        {
+          "chunk_id": "chunk_3",
+          "score": 0.11304,
+          "mass": 1.304,
+          "span_start": 311,
+          "span_end": 463,
+          "excerpt": "Section 3 Payment Mechanics\n3.1 Payment Terms. Principal and accrued interest rate amounts are payable monthly; prepayment is permitted subject to fees.",
+          "node_ids": [
+            "auto_3"
+          ]
+        }
+      ],
+      "chunk_count": 8,
+      "params": {
+        "window": 6,
+        "merge": "mass_strength_naive"
+      }
+    }
   },
   "dag_execution": {
     "template_id": "credit_agreement_v0_1",
@@ -552,6 +573,49 @@
           "version": "0.1"
         }
       }
-    ]
+    ],
+    "retrieval": {
+      "method": "dynamic_chunking_naive_mass_strength",
+      "chunks": [
+        {
+          "chunk_id": "chunk_6",
+          "score": 0.4124,
+          "mass": 1.24,
+          "span_start": 729,
+          "span_end": 849,
+          "excerpt": "Section 6 Defaults\n6.1 Events of Default. Non-payment, covenant breach, and cross default trigger acceleration remedies.",
+          "node_ids": [
+            "auto_6"
+          ]
+        },
+        {
+          "chunk_id": "chunk_1",
+          "score": 0.2132,
+          "mass": 1.32,
+          "span_start": 0,
+          "span_end": 160,
+          "excerpt": "Section 1 Definitions\n1.1 Conditions Precedent. Conditions precedent to initial borrowing include delivery of constitutional documents and officer certificates.",
+          "node_ids": [
+            "auto_1"
+          ]
+        },
+        {
+          "chunk_id": "chunk_3",
+          "score": 0.11304,
+          "mass": 1.304,
+          "span_start": 311,
+          "span_end": 463,
+          "excerpt": "Section 3 Payment Mechanics\n3.1 Payment Terms. Principal and accrued interest rate amounts are payable monthly; prepayment is permitted subject to fees.",
+          "node_ids": [
+            "auto_3"
+          ]
+        }
+      ],
+      "chunk_count": 8,
+      "params": {
+        "window": 6,
+        "merge": "mass_strength_naive"
+      }
+    }
   }
 }

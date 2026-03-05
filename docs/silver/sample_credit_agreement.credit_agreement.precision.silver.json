@@ -3,7 +3,7 @@
     "path": "G:\\CAA\\docs\\cache\\sample_credit_agreement.txt",
     "doc_type": "credit_agreement",
     "mode": "precision",
-    "processed_utc": "2026-02-18T19:47:01.500808+00:00"
+    "processed_utc": "2026-03-05T16:27:40.745135+00:00"
   },
   "bronze_artifact": "G:\\CAA\\docs\\bronze\\sample_credit_agreement.bronze.json",
   "spine": {
@@ -889,7 +889,50 @@
           "version": "0.1"
         }
       }
-    ]
+    ],
+    "retrieval": {
+      "method": "dynamic_chunking_naive_mass_strength",
+      "chunks": [
+        {
+          "chunk_id": "chunk_6",
+          "score": 0.4124,
+          "mass": 1.24,
+          "span_start": 729,
+          "span_end": 849,
+          "excerpt": "Section 6 Defaults\n6.1 Events of Default. Non-payment, covenant breach, and cross default trigger acceleration remedies.",
+          "node_ids": [
+            "auto_6"
+          ]
+        },
+        {
+          "chunk_id": "chunk_1",
+          "score": 0.2132,
+          "mass": 1.32,
+          "span_start": 0,
+          "span_end": 160,
+          "excerpt": "Section 1 Definitions\n1.1 Conditions Precedent. Conditions precedent to initial borrowing include delivery of constitutional documents and officer certificates.",
+          "node_ids": [
+            "auto_1"
+          ]
+        },
+        {
+          "chunk_id": "chunk_3",
+          "score": 0.11304,
+          "mass": 1.304,
+          "span_start": 311,
+          "span_end": 463,
+          "excerpt": "Section 3 Payment Mechanics\n3.1 Payment Terms. Principal and accrued interest rate amounts are payable monthly; prepayment is permitted subject to fees.",
+          "node_ids": [
+            "auto_3"
+          ]
+        }
+      ],
+      "chunk_count": 8,
+      "params": {
+        "window": 6,
+        "merge": "mass_strength_naive"
+      }
+    }
   },
   "orchestrator_decision": {
     "query": "Quote events of default and compare against baseline risk requirements.",
@@ -923,6 +966,50 @@
       "clause_classifier",
       "obligation_extractor",
       "playbook_compare"
-    ]
+    ],
+    "spine_source": "auto",
+    "retrieval": {
+      "method": "dynamic_chunking_naive_mass_strength",
+      "chunks": [
+        {
+          "chunk_id": "chunk_6",
+          "score": 0.4124,
+          "mass": 1.24,
+          "span_start": 729,
+          "span_end": 849,
+          "excerpt": "Section 6 Defaults\n6.1 Events of Default. Non-payment, covenant breach, and cross default trigger acceleration remedies.",
+          "node_ids": [
+            "auto_6"
+          ]
+        },
+        {
+          "chunk_id": "chunk_1",
+          "score": 0.2132,
+          "mass": 1.32,
+          "span_start": 0,
+          "span_end": 160,
+          "excerpt": "Section 1 Definitions\n1.1 Conditions Precedent. Conditions precedent to initial borrowing include delivery of constitutional documents and officer certificates.",
+          "node_ids": [
+            "auto_1"
+          ]
+        },
+        {
+          "chunk_id": "chunk_3",
+          "score": 0.11304,
+          "mass": 1.304,
+          "span_start": 311,
+          "span_end": 463,
+          "excerpt": "Section 3 Payment Mechanics\n3.1 Payment Terms. Principal and accrued interest rate amounts are payable monthly; prepayment is permitted subject to fees.",
+          "node_ids": [
+            "auto_3"
+          ]
+        }
+      ],
+      "chunk_count": 8,
+      "params": {
+        "window": 6,
+        "merge": "mass_strength_naive"
+      }
+    }
   }
 }
